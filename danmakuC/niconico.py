@@ -1,10 +1,13 @@
 import io
 import re
+import xml.etree.ElementTree as ET
+from ast import literal_eval
+from datetime import datetime
 from .ass import Ass
 from .protobuf.niconico import NNDCommentProto
 from typing import Union, Optional
 
-__all__ = ['proto2ass']
+__all__ = ['proto2ass', 'json2ass', 'xml2ass']
 
 
 def proto2ass(
@@ -47,11 +50,97 @@ def proto2ass(
         return ass.to_string()
 
 
+def json2ass(
+        json_file,
+        width: int,
+        height: int,
+        reserve_blank: int = 0,
+        font_face: str = "sans-serif",
+        font_size: float = 25.0,
+        alpha: float = 1.0,
+        duration_marquee: float = 5.0,
+        duration_still: float = 5.0,
+        comment_filter: str = "",
+        reduced: bool = False,
+        out_filename: str = "",
+) -> Optional[str]:
+    ass = Ass(width, height, reserve_blank, font_face, font_size, alpha, duration_marquee,
+              duration_still, comment_filter, reduced)
+    with open(json_file, 'r', encoding="UTF-8") as f:
+        f = literal_eval(f.read())
+    if isinstance(f, dict):
+        for key in ["data", "threads", "comments"]:
+            if key in f:
+                f = f[key]
+    commentlist = f
+    if f and "comments" in f[0]:
+        commentlist = []
+        for data in f:
+            commentlist += data["comments"]
+    for comment in commentlist:
+        unixtime = datetime.fromisoformat(comment['postedAt']).timestamp()
+        pos, color, size = process_mailstyle(comment["commands"], font_size)
+        ass.add_comment(
+            comment["vposMs"] / 1000,
+            int(unixtime),
+            comment["body"],
+            size,
+            pos,
+            color,
+        )
+    if out_filename:
+        return ass.write_to_file(out_filename)
+    else:
+        return ass.to_string()
+
+
+def xml2ass(
+        xml_file: ET.ElementTree,
+        width: int,
+        height: int,
+        reserve_blank: int = 0,
+        font_face: str = "sans-serif",
+        font_size: float = 25.0,
+        alpha: float = 1.0,
+        duration_marquee: float = 5.0,
+        duration_still: float = 5.0,
+        comment_filter: str = "",
+        reduced: bool = False,
+        out_filename: str = "",
+) -> Optional[str]:
+    ass = Ass(width, height, reserve_blank, font_face, font_size, alpha, duration_marquee,
+              duration_still, comment_filter, reduced)
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+    for chat in root.findall("chat"):
+        if chat.text is None:
+            continue
+        mail = chat.get("mail")
+        vpos = int(chat.get("vpos"))
+        date = int(chat.get("date"))
+        text = chat.text
+        pos, color, size = process_mailstyle(mail, font_size)
+        ass.add_comment(
+            vpos / 100,
+            date,
+            text,
+            size,
+            pos,
+            color,
+        )
+    if out_filename:
+        return ass.write_to_file(out_filename)
+    else:
+        return ass.to_string()
+
+
 def process_mailstyle(mail, fontsize):
     pos, color, size, patissier = 0, 0xffffff, fontsize, False
     if not mail:
         return pos, color, size  # , patissier
-    for mailstyle in mail.split():
+    if isinstance(mail, str):
+        mail = mail.split()
+    for mailstyle in mail:
         if mailstyle == 'ue':  # top middle
             pos = 1
         elif mailstyle == 'shita':  # bottom middle
